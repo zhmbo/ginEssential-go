@@ -13,12 +13,39 @@ import (
 	"net/http"
 )
 
-func Register(ctx *gin.Context) {
-	DB := common.GetDB()
+type IUserController interface {
+	Register(ctx *gin.Context)
+	Login(ctx *gin.Context)
+	Info(ctx *gin.Context)
+}
+
+type UserController struct {
+	DB *gorm.DB
+}
+
+func NewUserController() IUserController {
+	db := common.DB
+	// 自动迁移
+	db.AutoMigrate(&model.User{})
+	return UserController{DB: db}
+}
+
+func (u UserController) Register(ctx *gin.Context) {
+	// 使用map 获取请求参数
+	//var requestMap = make(map[string]string)
+	//json.NewDecoder(ctx.Request.Body).Decode(&requestMap)
+
+	// 结构体获取请求数据
+	var requestUser model.User
+	//json.NewDecoder(ctx.Request.Body).Decode(&requestUser)
+
+	// gin Bind获取请求参数
+	ctx.Bind(&requestUser)
+
 	// 获取参数
-	name := ctx.PostForm("name")
-	telephone := ctx.PostForm("telephone")
-	password := ctx.PostForm("password")
+	name := requestUser.Name
+	telephone := requestUser.Telephone
+	password := requestUser.Password
 
 	// 验证手机号
 	if len(telephone) != 11 {
@@ -39,7 +66,7 @@ func Register(ctx *gin.Context) {
 
 	log.Println(name, telephone, password)
 	//判断手机号是否存在
-	if isTelephoneExist(DB, telephone) {
+	if isTelephoneExist(u.DB, telephone) {
 		response.Response(ctx, http.StatusUnprocessableEntity, 422, nil, "用户已存在")
 		return
 	}
@@ -55,16 +82,31 @@ func Register(ctx *gin.Context) {
 		Telephone: telephone,
 		Password:  string(hasedPassword),
 	}
-	DB.Create(&newUser)
+	u.DB.Create(&newUser)
 
-	response.Success(ctx,nil, "注册成功")
+
+	// 发放token
+	token, err := common.ReleaseTken(newUser)
+	if err != nil {
+		response.Response(ctx, http.StatusInternalServerError, 500, nil, "系统错误")
+		log.Panicf("token generate error : %v", err)
+		return
+	}
+
+	response.Success(ctx, gin.H{"token": token}, "注册成功")
 }
 
-func Login(ctx *gin.Context) {
-	DB := common.GetDB()
+func (u UserController) Login(ctx *gin.Context) {
 	// 获取参数
-	telephone := ctx.PostForm("telephone")
-	password := ctx.PostForm("password")
+	var requestUser model.User
+	// gin Bind获取请求参数
+	ctx.Bind(&requestUser)
+
+	// 获取参数
+	telephone := requestUser.Telephone
+	password := requestUser.Password
+
+	log.Println("手机号：", telephone)
 
 	// 验证手机号
 	if len(telephone) != 11 {
@@ -80,7 +122,7 @@ func Login(ctx *gin.Context) {
 
 	// 判断手机号是否存在
 	var user model.User
-	DB.Where("telephone = ?", telephone).First(&user)
+	u.DB.Where("telephone = ?", telephone).First(&user)
 	if user.ID == 0 {
 		response.Response(ctx, http.StatusUnprocessableEntity, 422, nil, "用户不存在")
 		return
@@ -103,7 +145,7 @@ func Login(ctx *gin.Context) {
 	response.Success(ctx, gin.H{"token": token}, "登陆成功")
 }
 
-func Info(ctx *gin.Context) {
+func (u UserController) Info(ctx *gin.Context) {
 	user, _ := ctx.Get("user")
 	data := gin.H{"user": dto.ToUserDto(user.(model.User))}
 	response.Success(ctx, data, "")
